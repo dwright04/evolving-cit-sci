@@ -24,8 +24,6 @@ from keras.layers import Dense
 from keras.layers import LSTM
 from keras.utils import np_utils
 
-# Database imports
-
 def get_training_example(file, plot=False):
   image = misc.imread(file)
   h, w = image.shape
@@ -49,9 +47,7 @@ def build_model(summary=False):
     model.summary()
   return model
 
-def get_es_guesses(image, model, npop=10, sigma=0.1, alpha=0.001, plot=False):
-  # get the weights from this network (it is currently only randomly initialised)
-  w = model.get_weights()
+def get_es_guesses(image, w, npop=10, sigma=0.1, plot=False):
   # perturb the weights of the RNN and make a prediction
   images = []
   w_tries = []
@@ -107,7 +103,7 @@ class mainFrame(wx.Frame):
 
     self.ax1 = self.fig.add_subplot(121)
     self.ax2 = self.fig.add_subplot(122)
-    
+
     self.create_main_panel()
 
   def create_main_panel(self):
@@ -144,9 +140,11 @@ class mainFrame(wx.Frame):
 
   def on_left(self, event):
     self.rewards[self.comparisons[0][0]] += 1
+    self.rewards[self.comparisons[0][1]] -= 1
     self.next_or_done()
 
   def on_right(self, event):
+    self.rewards[self.comparisons[0][0]] -= 1
     self.rewards[self.comparisons[0][1]] += 1
     self.next_or_done()
 
@@ -160,12 +158,15 @@ class mainFrame(wx.Frame):
       wx.GetApp().ExitMainLoop()
     else:
       self.draw()
+      self.canvas.draw()
+      self.canvas.Refresh()
 
 def gather_human_feedback(images):
   app = wx.App()
   app.frame = mainFrame(images)
   app.frame.Show()
   app.MainLoop()
+  return app.frame.rewards
 
 def main():
   # path to image data
@@ -173,12 +174,26 @@ def main():
   file = os.path.join(dataPath+'a01/a01-000u/a01-000u-00-01.png')
   image = get_training_example(file, plot=False)
   model = build_model(summary=True)
-  npop=5
+  npop=10
+  alpha=0.001
+  sigma=0.1
+  niters = 100
   print('With npop=%d there will be %d comparisons (%dC2)'%(npop, n_choose_k(npop, 2), npop))
-  images, w_tries = get_es_guesses(image, model, npop=npop, plot=False)
-  gather_human_feedback(images)
-  for i in range(100):
-    print(i)
+  # get the weights from this network (it is currently only randomly initialised)
+  w = model.get_weights()
+  for i in range(niters):
+    images, w_tries = get_es_guesses(image, w, npop=npop, plot=False)
+    rewards = gather_human_feedback(images)
+    R = []
+    for i in range(len(w_tries)):
+      R.append(rewards[i])
+    R = np.asarray(R)
+    print(R)
+    A = (R - np.mean(R)) / np.std(R)
+    print(A)
+    for i in range(len(w_tries)):
+      for j in range(len(w_tries[i])):
+        w[j] += alpha/(npop*sigma) * w_tries[i][j]*A[i]
 
 if __name__ == '__main__':
   main()
