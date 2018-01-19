@@ -24,6 +24,14 @@ from keras.layers import Dense
 from keras.layers import LSTM
 from keras.utils import np_utils
 
+def build_word_map(data_path):
+  word_map = {}
+  for line in open(data_path+'/words.txt').readlines():
+    if '#' in line:
+      continue
+    word_map[line.strip().split(' ')[0]+'.png'] = line.strip().split(' ')[-1]
+  return word_map
+
 def get_training_example(file, plot=False):
   image = misc.imread(file)
   h, w = image.shape
@@ -36,6 +44,26 @@ def get_training_example(file, plot=False):
     plt.axis('off')
     plt.show()
   return image
+
+def window_transform_series(series, window_size, stride):
+  # containers for input/output pairs
+  X = []
+  y = []
+  n = series.shape[1]
+  for i in range(window_size, n-window_size, stride):
+    print(i)
+    X.append(series[:,i-window_size:i+window_size])
+    y.append(np.sum(series[:,i]) < 10)
+  if y == []:
+    return None, None
+  X = np.asarray(X)
+  y = np.asarray(y)
+  return X, y
+
+def get_training_image_snippets(file, window_size=20, stride=1, plot=False):
+  image = get_training_example(file, plot=False)
+  X, y = window_transform_series(image, window_size, stride)
+  return X, y
 
 def build_model(summary=False):
   # build a model similar to above, but smaller for the time being.
@@ -68,8 +96,8 @@ def get_es_guesses(image, w, npop=10, sigma=0.1, plot=False):
     pred = np.argmax(model_copy.predict(image.T[:,np.newaxis,:]), axis=1)
     img = np.zeros((image.shape[0], image.shape[1], 3))
     img[:,:,0] += image
-    for i in range(len(pred)):
-      img[:,i,1] += pred[i]
+    #for i in range(len(pred)):
+    img[:,-1,1] += pred[-1]
     images.append(img)
     if plot:
       plt.imshow(img)
@@ -90,9 +118,7 @@ class mainFrame(wx.Frame):
     wx.Frame.__init__(self, None, -1, self.title, size=(750,500), pos=(50,50))
     self.images = images
     self.npop = len(self.images)
-    self.rewards = {}
-    for i in range(self.npop):
-      self.rewards[i] = 0
+    self.rewards = np.zeros((self.npop,))
     self.comparisons = list(itertools.combinations(range(self.npop), 2))
     shuffle(self.comparisons)
     
@@ -140,11 +166,11 @@ class mainFrame(wx.Frame):
 
   def on_left(self, event):
     self.rewards[self.comparisons[0][0]] += 1
-    self.rewards[self.comparisons[0][1]] -= 1
+    #self.rewards[self.comparisons[0][1]] -= 1
     self.next_or_done()
 
   def on_right(self, event):
-    self.rewards[self.comparisons[0][0]] -= 1
+    #self.rewards[self.comparisons[0][0]] -= 1
     self.rewards[self.comparisons[0][1]] += 1
     self.next_or_done()
 
@@ -168,28 +194,59 @@ def gather_human_feedback(images):
   app.MainLoop()
   return app.frame.rewards
 
+def plot_image_and_transcription(word_map, data_path, image_partition, word_length_min=4, n_images=25):
+  fig = plt.figure()
+  fig.subplots_adjust(left=0.05, bottom=0.01, right=0.95, top=0.95, wspace=0.1, hspace=0.2)
+  plot_dim = int(np.ceil(np.sqrt(n_images)))
+  i = 0
+  for file in os.listdir(data_path + image_partition):
+    transcription = word_map[file]
+    if len(transcription) < word_length_min:
+      continue
+    ax = fig.add_subplot(plot_dim,plot_dim,i+1)
+    image = get_training_example(data_path + image_partition + file, plot=False)
+    ax.set_title(transcription)
+    ax.imshow(image, cmap='gray')
+    plt.axis('off')
+    if i == n_images-1:
+      break
+    i+=1
+  plt.show()
+  
 def main():
+  ## General constants
   # path to image data
-  dataPath = '/Users/dwright/dev/gym-zooniverse/gym_zooniverse/envs/assets/'
-  file = os.path.join(dataPath+'a01/a01-000u/a01-000u-00-01.png')
-  image = get_training_example(file, plot=False)
-  model = build_model(summary=True)
+  data_path = '/Users/dwright/dev/gym-zooniverse/gym_zooniverse/envs/assets/'
+  image_partition = 'a01/a01-000u/'
+  word_length_min = 4
+  n_images = 9
+  window_size = 20
+  stride = 5
+  
+  ## ES constants
   npop=10
   alpha=0.001
   sigma=0.1
-  niters = 100
+  niters = 2
+  
   print('With npop=%d there will be %d comparisons (%dC2)'%(npop, n_choose_k(npop, 2), npop))
   # get the weights from this network (it is currently only randomly initialised)
+  
+  word_map = build_word_map(data_path)
+  
+  plot_image_and_transcription(word_map, data_path, image_partition, \
+    word_length_min=word_length_min, n_images=n_images)
+
+  model = build_model(summary=True)
   w = model.get_weights()
   for i in range(niters):
-    images, w_tries = get_es_guesses(image, w, npop=npop, plot=False)
-    rewards = gather_human_feedback(images)
-    R = []
-    for i in range(len(w_tries)):
-      R.append(rewards[i])
-    R = np.asarray(R)
-    print(R)
+    R = np.zeros((npop,))
+    for img in imgs:
+      images, w_tries = get_es_guesses(img, w, npop=npop, plot=False)
+      rewards = gather_human_feedback(images)
+      R += rewards
     A = (R - np.mean(R)) / np.std(R)
+    A = np.nan_to_num(A)
     print(A)
     for i in range(len(w_tries)):
       for j in range(len(w_tries[i])):
